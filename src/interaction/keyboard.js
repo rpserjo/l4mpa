@@ -15,6 +15,17 @@ function create(params = {}){
     let _keyClass = window.SimpleKeyboard.default,
         _keyBord
 
+    let _lang_codes = {
+        'ru': 'ru-RU',
+        'en': 'en-US',
+        'be': 'be-BY',
+        'uk': 'uk-UA',
+        'zh': 'zh-CN',
+        'bg': 'bg-BG',
+        'pt': 'pt-PT',
+        'cs': 'cs-CZ'
+    }
+
     let last
     let ime
     let recognition
@@ -99,7 +110,7 @@ function create(params = {}){
             })
 
             input.on('focus',()=>{               
-                Keypad.disable()
+                if(!Platform.is('apple_tv')) Keypad.disable()
 
                 time_focus = Date.now()                        
             })
@@ -111,15 +122,15 @@ function create(params = {}){
                 let valu = input.val()
                 let cart = e.target.selectionStart
 
-                if(keys.indexOf(e.keyCode) >= 0 && !(Utils.isTouchDevice() && params.textarea)){
+                if(keys.indexOf(e.keyCode) >= 0 && !(Utils.isTouchDevice() && params.textarea && Platform.screen('mobile'))){
                     e.preventDefault()
 
                     console.log('Keyboard','blur key:',e.keyCode, 'value:',valu)
                     
                     input.blur()
-                } 
+                }
 
-                if((e.keyCode == 13 || e.keyCode == 65376) && !(Utils.isTouchDevice() && params.textarea)) this.listener.send('enter')
+                if((e.keyCode == 13 || e.keyCode == 65376) && !(Utils.isTouchDevice() && params.textarea && Platform.screen('mobile'))) this.listener.send('enter')
 
                 if(e.keyCode == 37 && cart == 0 && height == window.innerHeight){
                     if(stated) input.blur(), this.listener.send('left')
@@ -347,6 +358,9 @@ function create(params = {}){
         if(SpeechRecognition){
             recognition = new SpeechRecognition()
             recognition.continuous = false
+            recognition.lang = _lang_codes[Storage.get('language','ru')] || 'en-US'
+
+            console.log('Speech', 'lang:', recognition.lang)
 
             recognition.addEventListener("start", ()=>{
                 console.log('Speech', 'start')

@@ -97,6 +97,8 @@ function create(params = {}){
     }
 
     function scrollTo(scrl){
+        scroll_position = scrl
+
         if(!Platform.screen('tv')){
             let object = {}
 
@@ -117,8 +119,6 @@ function create(params = {}){
                 else animate()
             }
         }
-
-        scroll_position = scrl
     }
 
     function animate(){
@@ -276,6 +276,10 @@ function create(params = {}){
 
     this.params = function(){
         return params
+    }
+
+    this.position = function(){
+        return scroll_position
     }
 
     this.reset = function(){

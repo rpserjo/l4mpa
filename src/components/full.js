@@ -61,7 +61,7 @@ function component(object){
 
         Api.full(object,(data)=>{
             if(data.movie && data.movie.blocked){
-                this.empty()
+                this.empty({blocked: true})
             }
             else if(data.movie){
                 loaded_data = data
@@ -132,7 +132,7 @@ function component(object){
 
                 Timetable.update(data.movie)
 
-                this.visible()
+                this.visible(0)
 
                 Lampa.Listener.send('full',{type:'complite',object,data})
 
@@ -152,7 +152,7 @@ function component(object){
         return this.render()
     }
 
-    this.empty = function(){
+    this.empty = function(er = {}){
         let button
 
         if(object.source == 'tmdb'){
@@ -165,9 +165,24 @@ function component(object){
             })
         }
 
-        let empty = new Empty()
+        let text  = {}
 
-        scroll.append(empty.render(button))
+        if(Utils.dcma(object.method, object.id) || er.blocked){
+            text.title  = Lang.translate('dmca_title')
+            text.descr  = Lang.translate('dmca_descr')
+            text.noicon = true
+        }
+
+        let empty = new Empty(text)
+
+        if(button) empty.append(button)
+
+        empty.addInfoButton([
+            ['Movie id', object.id],
+            ['DMCA', Utils.dcma(object.method, object.id) ? 'Yes' : 'No']
+        ])
+
+        scroll.append(empty.render(true))
 
         this.start = empty.start
 
@@ -261,7 +276,7 @@ function component(object){
     this.loadBackground = function(data){
         let background = data.movie.backdrop_path ? Api.img(data.movie.backdrop_path,'w1280') : data.movie.background_image ? data.movie.background_image : ''
 
-        if(window.innerWidth > 790 && background && !Storage.field('light_version') && Storage.field('background_type') !== 'poster'){
+        if(window.innerWidth > 790 && background && !Storage.field('light_version')){
             background_image = html.find('.full-start__background')[0] || {}
 
             background_image.onload = function(e){

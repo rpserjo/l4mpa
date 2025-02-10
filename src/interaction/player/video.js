@@ -46,6 +46,7 @@ let render_trigger
 
 let click_nums = 0
 let click_timer
+let pause_timer
 
 function init(){
     html      = Template.get('player_video')
@@ -708,6 +709,8 @@ function loaded(){
  * @param {[{index:integer, label:string, url:string}]} subs 
  */
 function customSubs(subs){
+    if(!Arrays.isArray(subs)) return console.log('Player','custom subs not array', subs)
+
     video.customSubs = Arrays.clone(subs)
 
     console.log('Player','custom subs', subs)
@@ -792,6 +795,8 @@ function create(){
         if(Platform.is('apple') && Storage.field('player') !== 'ios') videobox.attr('playsinline','true')
 
         video = videobox[0]
+
+        if(typeof video.canPlayType !== 'function') video.canPlayType = ()=>{}
 
         if(Storage.field('player_normalization')){
             try{
@@ -1069,6 +1074,12 @@ function pause(){
     }
 
     paused.removeClass('hide')
+    
+    clearTimeout(pause_timer)
+
+    pause_timer = setTimeout(()=>{
+        paused.addClass('hide')
+    },4000)
 
     listener.send('pause',{})
 }

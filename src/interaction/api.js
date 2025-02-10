@@ -3,11 +3,11 @@ import Favorite from '../utils/favorite'
 import Utils from '../utils/math'
 import Progress from '../utils/progress'
 import Arrays from '../utils/arrays'
-import Lang from '../utils/lang'
 import Storage from '../utils/storage'
 import TMDB from '../utils/api/tmdb'
 import CUB  from '../utils/api/cub'
 import Manifest from '../utils/manifest'
+import Account from '../utils/account'
 
 /**
  * Источники
@@ -183,25 +183,48 @@ function collections(params, oncomplite, onerror){
  * @param {function} onerror 
  */
 function favorite(params = {}, oncomplite, onerror){
-    let data = {}
+    let extract = ()=>{
+        let data = {}
 
-    data.results = Favorite.get(params)
+        data.results = Favorite.get(params)
 
-    if(params.filter){
-        data.results = data.results.filter(a=>{
-            return params.filter == 'tv' ? a.name : !a.name
-        })
+        if(params.filter){
+            data.results = data.results.filter(a=>{
+                return params.filter == 'tv' ? a.name : !a.name
+            })
+        }
+
+        data.total_pages = Math.ceil(data.results.length / 20)
+        data.page = Math.min(params.page, data.total_pages)
+
+        let offset = data.page - 1
+
+        data.results = data.results.slice(20 * offset,20 * offset + 20)
+
+        if(data.results.length) oncomplite(data)
+        else onerror()
     }
 
-    data.total_pages = Math.ceil(data.results.length / 20)
-    data.page = Math.min(params.page, data.total_pages)
+    if(Account.working()){
+        let tic   = 0
+        let timer = setInterval(()=>{
+            let any = Lampa.Account.all()
 
-    let offset = data.page - 1
+            if(any.length){
+                clearInterval(timer)
 
-    data.results = data.results.slice(20 * offset,20 * offset + 20)
+                extract()
+            }
+            else if(tic > 10){
+                clearInterval(timer)
+                
+                onerror()
+            }
 
-    if(data.results.length) oncomplite(data)
-    else onerror()
+            tic++
+        },1000)
+    }
+    else extract()
 }
 
 /**
@@ -213,7 +236,9 @@ function relise(params, oncomplite, onerror){
     network.silent(Utils.protocol() + 'tmdb.'+Manifest.cub_domain+'?sort=releases&results=20&page='+params.page,oncomplite, onerror)
 }
 
-function partPersons(parts, parts_limit, type){
+function partPersons(parts, parts_limit, type, shift = 0){
+    if(shift == 0) shift = parts.length
+    
     return (call)=>{
         if(['movie','tv'].indexOf(type) == -1) return call()
 
@@ -225,11 +250,9 @@ function partPersons(parts, parts_limit, type){
             let filtred = json.results.filter(p=>p.known_for_department && p.known_for)
 
             let persons = filtred.filter(p=>(p.known_for_department || '').toLowerCase() == 'acting' && p.known_for.length && p.popularity > 30).slice(0,10)
-            let total   = parts.length - parts_limit
-            let offset  = Math.round(total / persons.length)
 
             persons.forEach((person_data,index)=>{
-                Arrays.insert(parts,index + parts_limit + (offset * index), (call_inner)=>{
+                let event = (call_inner)=>{
                     person({only_credits: type, id: person_data.id},(result)=>{
                         if(!result.credits) return call_inner()
 
@@ -260,7 +283,11 @@ function partPersons(parts, parts_limit, type){
 
                         call_inner({results: items.length > 5 ? items.slice(0,20) : [],nomore: true,title: icon})
                     })
-                })
+                }
+
+                parts.push(event)
+
+                Arrays.shuffleArrayFromIndex(parts, shift)
             })
         },call)
     }

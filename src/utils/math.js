@@ -1,6 +1,17 @@
 import Storage from './storage'
 import Api from '../interaction/api'
 import Lang from './lang'
+import Manifest from './manifest'
+
+/**
+ * Преобразование секунд в формат времени
+ * @doc
+ * @name secondsToTime
+ * @alias Utils
+ * @param {integer} sec время в секундах
+ * @param {boolean} short короткое время
+ * @returns {string} (hours : minutes : seconds) или (minutes : seconds)
+ */
 
 function secondsToTime(sec, short){
     var sec_num = parseInt(sec, 10);
@@ -21,11 +32,30 @@ function secondsToTime(sec, short){
     return hours+':'+minutes+':'+seconds;
 }
 
+/**
+ * Преабразует первую букву строки в верхний регистр
+ * @doc
+ * @name capitalizeFirstLetter
+ * @alias Utils
+ * @param {string} string значение
+ * @returns {string}
+ */
+
 function capitalizeFirstLetter(string) {
     string = string + ''
 
     return string.charAt(0).toUpperCase() + string.slice(1);
 }
+
+/**
+ * Сокращает строку до указанной длины
+ * @doc
+ * @name substr
+ * @alias Utils
+ * @param {string} txt текст
+ * @param {integer} len длина
+ * @returns {string}
+ */
 
 function substr(txt,len){
     txt = txt || '';
@@ -176,11 +206,21 @@ function parseTime(str){
     }
 }
 
-function secondsToTimeHuman(sec_num) {
-    let hours   = Math.trunc(sec_num / 3600)
-    let minutes = Math.floor((sec_num - hours * 3600) / 60)
+// function secondsToTimeHuman(sec_num) {
+//     let hours   = Math.trunc(sec_num / 3600)
+//     let minutes = Math.floor((sec_num - hours * 3600) / 60)
 
-    return (hours ? hours + ' '+Lang.translate('time_h')+' ' : '') + (minutes ? minutes + ' '+Lang.translate('time_m')+' ' : Math.round(sec_num) + ' '+Lang.translate('time_s'))
+//     return (hours ? hours + ' '+Lang.translate('time_h')+' ' : '') + (minutes ? minutes + ' '+Lang.translate('time_m')+' ' : Math.round(sec_num) + ' '+Lang.translate('time_s'))
+// }
+
+function secondsToTimeHuman(sec_num) {
+    let hours = Math.trunc(sec_num / 3600);
+    let minutes = Math.trunc((sec_num % 3600) / 60); // Остаток от деления используется для вычисления минут
+    let seconds = Math.round(sec_num % 60); // Остаток от деления для секунд
+
+    return (hours ? hours + ' ' + Lang.translate('time_h') + ' ' : '') + 
+           (minutes ? minutes + ' ' + Lang.translate('time_m') + ' ' : '') + 
+           (hours === 0 && minutes === 0 ? seconds + ' ' + Lang.translate('time_s') : '');
 }
 
 function strToTime(str){
@@ -211,6 +251,18 @@ function checkEmptyUrl(url){
 
 function rewriteIfHTTPS(u){
     return window.location.protocol == 'https:' ? u.replace(/(http:\/\/|https:\/\/)/g, 'https://') : u
+}
+
+function fixProtocolLink(u){
+    return rewriteIfHTTPS((localStorage.getItem('protocol') || 'https') + '://' + u.replace(/(http:\/\/|https:\/\/)/g, ''))
+}
+
+function fixMirrorLink(u){
+    Manifest.cub_mirrors.forEach(mirror=>{
+        u = u.replace('://' + mirror, '://' + Manifest.cub_domain)
+    })
+
+    return u
 }
 
 function shortText(fullStr, strLen, separator){
@@ -375,7 +427,7 @@ function cardImgBackground(card_data){
 
 function cardImgBackgroundBlur(card_data){
     let uri = card_data.poster_path || card_data.profile_path ? Api.img(card_data.poster_path || card_data.profile_path,'w200') : card_data.poster || card_data.img || ''
-    let pos = window.innerWidth > 400 && Storage.field('background_type') == 'poster'
+    let pos = window.innerWidth > 400 && Storage.field('background_type') == 'poster' && !Storage.field('card_interfice_cover')
 
     if(Storage.field('background')){
         if(card_data.backdrop_path)                uri = Api.img(card_data.backdrop_path, pos ? 'w1280' : 'w200')
@@ -647,6 +699,58 @@ function filterCardsByType(items, need){
     return filtred
 }
 
+function buildUrl(baseUrl, path, queryParams) {
+    // Убираем все, что идет после хоста (например, /ts)
+    var host = baseUrl.split('/').slice(0, 3).join('/');
+
+    // Убираем лишние "/" в начале и конце пути
+    var url = host + '/' + path.replace(/^\/+/, '');
+
+    // Формируем строку запроса из массива объектов
+    var queryString = queryParams
+        .map(function(param) {
+            return encodeURIComponent(param.name) + '=' + encodeURIComponent(param.value);
+        })
+        .join('&');
+
+    // Добавляем строку запроса к URL, если есть параметры
+    return url + (queryString ? '?' + queryString : '');
+}
+
+function simpleMarkdownParser(input) {
+    // Обработка заголовков #
+    input = input.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+    input = input.replace(/^#+ (.*$)/gim, '<h4>$1</h4>');
+
+    // Обработка жирного текста **текст**
+    input = input.replace(/\*\*(.*?)\*\*/gim, '<b>$1</b>');
+
+    // Обработка списков * пункт
+    input = input.replace(/^\* (.*$)/gim, '<li>$1</li>');
+
+    // Обработка курсивного текста *текст*
+    input = input.replace(/\*(.*?)\*/gim, '<i>$1</i>');
+
+    // Оборачивание текста в <p>, если он не является частью других тегов
+    input = input.replace(/^(?!<h1>|<h4>|<li>|<b>|<i>)(.+)$/gim, '<p>$1</p>');
+
+    input = input.replace(/<li>/gim, '<p>');
+    input = input.replace(/<\/li>/gim, '</p>');
+
+    // Удаление лишних переносов строк
+    input = input.replace(/\n/gim, '');
+
+    return input;
+}
+
+function callWaiting(needCall, emergencyCall, time = 10000){
+    let timer = setTimeout(emergencyCall, time)
+
+    needCall(()=>{
+        clearTimeout(timer)
+    })
+}
+
 export default {
     secondsToTime,
     secondsToTimeHuman,
@@ -690,5 +794,10 @@ export default {
     gup,
     dcma,
     inputDisplay,
-    filterCardsByType
+    filterCardsByType,
+    buildUrl,
+    simpleMarkdownParser,
+    fixProtocolLink,
+    fixMirrorLink,
+    callWaiting
 }

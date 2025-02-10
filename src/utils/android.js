@@ -1,5 +1,23 @@
+import Platform from './platform.js'
+import Favorite from './favorite.js'
+import Params from '../components/settings/params'
+
 let reqCallback = {}
 let timeCallback = {}
+
+function init(){
+    if(Platform.is('android')){
+        Params.listener.follow('button',(e)=>{
+            if(e.name === 'reset_player'){
+                resetDefaultPlayer()
+            }
+        })
+
+        Favorite.listener.follow('add,added,remove', (e)=>{
+            updateChannel(e.where)
+        })
+    }
+}
 
 function exit() {
     if(checkVersion(1)) AndroidJS.exit()
@@ -48,16 +66,27 @@ function openTorrent(SERVER){
 }
 
 function openPlayer(link, data){
+    let updateTimeline = function(elem){
+        if(elem.timeline){
+            let new_timeline = Lampa.Timeline.view(elem.timeline.hash)
+
+            elem.timeline.time     = Math.round(new_timeline.time)
+            elem.timeline.duration = Math.round(new_timeline.duration)
+            elem.timeline.percent  = new_timeline.percent
+
+            timeCallback[elem.timeline.hash] = elem
+        }
+    }
+
     if(checkVersion(98, true)){
         if(data.timeline) {
-            data.timeline.time     = Math.round(data.timeline.time)
-            data.timeline.duration = Math.round(data.timeline.duration)
+            updateTimeline(data)
+        }
 
-            // Lampa.Noty.show('time: ' + data.timeline.time)
-
-            // console.log('Timecode', data.timeline)
-
-            timeCallback[data.timeline.hash] = data
+        if(data.playlist){
+            data.playlist.forEach(elem => {
+                updateTimeline(elem)
+            })
         }
     }
     if(checkVersion(10)) AndroidJS.openPlayer(link, JSON.stringify(data))
@@ -139,6 +168,7 @@ function checkVersion(needVersion, silent=false){
 }
 
 export default {
+    init,
     exit,
     openTorrent,
     openPlayer,

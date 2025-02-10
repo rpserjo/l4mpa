@@ -20,10 +20,6 @@ function stat(method, name){
 }
 
 function log(name, msg){
-    if(typeof Sentry !== 'undefined'){
-        Sentry.captureMessage('AD - [' + name + '] ' + msg)
-    }
-
     $.ajax({
         dataType: 'text',
         method: 'post',
@@ -36,10 +32,13 @@ function log(name, msg){
 }
 
 class Vast{
-    constructor(){
+    constructor(num, vast_url, vast_msg){
         this.network  = new Reguest()
         this.listener = Subscribe()
         this.paused   = false
+        this.num      = num
+        this.vast_url = vast_url
+        this.vast_msg = vast_msg
 
         if(loaded_data.time < Date.now() + 1000*60*60*1) this.load()
         else if(loaded_data.ad.length) setTimeout(this.start.bind(this), 100)
@@ -47,6 +46,8 @@ class Vast{
     }
 
     load(){
+        if(this.vast_url) return setTimeout(this.start.bind(this), 100)
+
         let domain = Manifest.cub_domain
 
         this.network.silent(Utils.protocol() + domain+'/api/ad/vast',(data)=>{
@@ -61,10 +62,18 @@ class Vast{
     }
 
     get(){
+        let list = loaded_data.ad
+
+        if(this.num > 1 && loaded_data.selected){
+            list = loaded_data.ad.filter(ad=>ad.name !== loaded_data.selected.name)
+        }
+
+        if(list.length === 0) list = loaded_data.ad
+
         // Шаг 1: Создаем "взвешенный массив"
         let weightedArray = []
 
-        loaded_data.ad.forEach(ad => {
+        list.forEach(ad => {
             // Добавляем элемент в массив столько раз, каков его приоритет
             for (let i = 0; i < ad.priority; i++) {
                 weightedArray.push(ad)
@@ -78,11 +87,13 @@ class Vast{
 
         const randomIndex = Math.floor(Math.random() * weightedArray.length)
 
-        return weightedArray[randomIndex]
+        loaded_data.selected = weightedArray[randomIndex]
+
+        return loaded_data.selected
     }
 
     start(){
-        let block = this.get()
+        let block = this.vast_url ? {url: this.vast_url, name: 'plugin'} : this.get()
 
         stat('launch', block.name)
 
@@ -90,13 +101,16 @@ class Vast{
 
         this.block.find('video').remove()
 
-        this.block.find('.ad-video-block__text').text(Lang.translate('ad')  + ' - ' + Lang.translate('ad_disable'))
+        this.block.find('.ad-video-block__text').text(Lang.translate('ad')  + ' - ' + Lang.translate('ad_disable')).toggleClass('hide',Boolean(this.vast_url))
         this.block.find('.ad-video-block__info').text('')
+
+        if(this.vast_msg) this.block.find('.ad-video-block__text').text(this.vast_msg).toggleClass('hide', false)
 
         let skip        = this.block.find('.ad-video-block__skip')
         let progressbar = this.block.find('.ad-video-block__progress-fill')
         let player
         let timer
+        let playning = true
 
         let adInterval
         let adReadySkip
@@ -108,12 +122,14 @@ class Vast{
 
             clearTimeout(timer)
 
+            console.log('Ad','error', code, msg)
+
             this.listener.send('error')
 
             stat('error', block.name)
             stat('error_' + code, block.name)
 
-            log(block.name, msg)
+            //if(code !== 500) log(block.name, msg)
         }
 
         function initialize(){
@@ -122,15 +138,46 @@ class Vast{
             player.once('AdStopped', ()=> {
                 stat('complete', block.name)
 
+                console.log('Ad', 'complete')
+
+                clearTimeout(timer)
+                clearInterval(adInterval)
+
                 this.destroy()
             })
 
-            player.load(block.url.replace('{RANDOM}',Math.round(Date.now() * Math.random())).replace('{TIME}',Date.now())).then(()=> {
-                onAdStarted()
+            player.on('AdPaused', ()=> {
+                console.log('Ad','event','PAUSE')
+                
+                playning = false
+            })
 
+            player.on('AdPlaying', ()=> {
+                console.log('Ad','event','PLAY')
+
+                playning = true
+            })
+
+            player.on('AdVideoStart', ()=> {
+                console.log('Ad','event','VIDEO_START')
+
+                let video = player.container.find('video')
+
+                if(video){
+                    video.addEventListener('pause', ()=> {
+                        console.log('Ad','event','PAUSE')
+
+                        playning = false
+                    })
+                } 
+            })
+
+            player.once('AdStarted', onAdStarted)
+
+            player.load(block.url.replace('{RANDOM}',Math.round(Date.now() * Math.random())).replace('{TIME}',Date.now())).then(()=> {
                 return player.startAd()
             }).catch((reason)=> {
-                error(100,reason)
+                error((reason.message || '').indexOf('nobanner') >= 0 ? 500 : 100, reason.message)
             })
         }
 
@@ -164,7 +211,7 @@ class Vast{
 
             progressbar.style.width = progress + '%'
 
-            adReadySkip = progress > 60
+            adReadySkip = progress > (block.progress || 60)
 
             skip.find('span').text(Lang.translate(adReadySkip ? 'ad_skip' : Math.round(remainingTime)))
 
@@ -183,6 +230,10 @@ class Vast{
                 }).catch(()=>{
                     error(200, 'Cant stop ads')
                 })
+            }
+            else{
+                if(playning) player.pauseAd()
+                else player.resumeAd()
             }
         }
 
@@ -206,20 +257,26 @@ class Vast{
             error(300,'Timeout')
         },10000)
 
+        console.log('Ad', 'run')
+
         try{
             initialize.apply(this)
         }
         catch(e){
-            console.log('Ad', 'error', e.message)
+            error(400,'Initialize', e ? e.message : '')
         }
 
         stat('run', block.name)
     }
 
     destroy(){
+        if(this.destroyed) return
+        
         this.block.remove()
 
         this.listener.send('ended')
+
+        this.destroyed = true
     }
 }
 

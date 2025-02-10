@@ -6,6 +6,7 @@ import Select from '../../interaction/select'
 import Controller from '../../interaction/controller'
 import Subscribe from '../../utils/subscribe'
 import Lang from '../../utils/lang'
+import Manifest from '../../utils/manifest'
 
 let values   = {}
 let defaults = {}
@@ -155,7 +156,8 @@ function init(){
             'vlc': 'VLC',
             'infuse': 'Infuse',
             'svplayer': 'SVPlayer',
-            'tvos': 'tvOS'
+            'tvos': 'tvOS',
+            'tvosSelect': 'Players'
         },'inner')
 
         select('player_iptv',{
@@ -185,7 +187,7 @@ function init(){
         'aerial': 'Aerial'
     }
 
-    select('screensaver_type',screensaver_types,'chrome')
+    select('screensaver_type',screensaver_types,'aerial')
 
     select('keyboard_type', {
         'lampa': '#{settings_param_keyboard_lampa}',
@@ -214,16 +216,17 @@ function init(){
 
     select('tmdb_lang',Lang.codes(),'ru')
 
-    let agent = navigator.userAgent.toLowerCase()
-    let versi = agent.match(/chrome\/(\d+)/)
+    // баг со старыми телеками, неправильно работает Utils.protocol()
+    // let agent = navigator.userAgent.toLowerCase()
+    // let versi = agent.match(/chrome\/(\d+)/)
 
-    versi = versi ? parseInt(versi[1]) : 60
-    versi = isNaN(versi) ? 60 : versi
+    // versi = versi ? parseInt(versi[1]) : 60
+    // versi = isNaN(versi) ? 60 : versi
 
     select('protocol', {
         'http': '#{settings_param_no}',
         'https': '#{settings_param_yes}',
-    },  versi >= 60 ? 'https' : 'http')
+    }, 'https')
 }
 
 /**
@@ -467,11 +470,6 @@ select('jackett_interview',{
     'healthy': '#{settings_param_jackett_interview_healthy}',
 },'all')
 
-select('torlook_parse_type',{
-    'native': '#{settings_param_parse_directly}',
-    'site': '#{settings_param_parse_api}',
-},'native')
-
 select('background_type',{
     'complex': '#{settings_param_background_complex}',
     'simple': '#{settings_param_background_simple}',
@@ -645,6 +643,13 @@ select('player_launch_trailers',{
     'youtube': 'YouTube',
 },'inner')
 
+let mirrors_select = {}
+
+Manifest.cub_mirrors.forEach((mirror)=>{
+    mirrors_select[mirror] = mirror
+})
+
+select('cub_domain', mirrors_select, Manifest.cub_domain)
 
 /**
  * Добовляем триггеры
@@ -696,7 +701,6 @@ select('torrserver_url_two','','')
 select('torrserver_login','','')
 select('torrserver_password','','')
 select('parser_website_url','','')
-select('torlook_site','','w41.torlook.info')
 select('cloud_token','','')
 select('account_email','','')
 select('account_password','','')
