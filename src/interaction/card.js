@@ -1,21 +1,20 @@
 import Template from './template'
-import Api from './api'
+import Api from '../core/api/api'
 import Arrays from '../utils/arrays'
 import Select from './select'
-import Favorite from '../utils/favorite'
-import Controller from './controller'
-import Storage from '../utils/storage'
-import Utils from '../utils/math'
-import Timetable from '../utils/timetable'
+import Favorite from '../core/favorite'
+import Controller from '../core/controller'
+import Storage from '../core/storage/storage'
+import Utils from '../utils/utils'
+import Timetable from '../core/timetable'
 import Timeline from './timeline'
-import Lang from '../utils/lang'
-import Tmdb from '../utils/tmdb'
-import Manifest from '../utils/manifest'
-import Search from '../components/search'
+import Lang from '../core/lang'
+import Tmdb from '../core/tmdb/tmdb'
+import Manifest from '../core/manifest'
+import Search from './search/global'
 import Loading from './loading'
-import TmdbApi from '../utils/api/tmdb'
-import ImageCache from '../utils/cache/images'
-import Account from '../utils/account'
+import TmdbApi from '../core/api/sources/tmdb'
+import Account from '../core/account/account'
 
 /**
  * Карточка
@@ -23,6 +22,8 @@ import Account from '../utils/account'
  * @param {{isparser:boolean, card_small:boolean, card_category:boolean, card_collection:boolean, card_wide:true}} params 
  */
 function Card(data, params = {}){
+    console.warn('Card is deprecated')
+
     this.data   = data
     this.params = params
 
@@ -71,13 +72,13 @@ function Card(data, params = {}){
             
             if(elem_title) elem_title.innerText = data.title
 
-            if(data.first_air_date){
+            if(data.original_name){
                 let type_elem = document.createElement('div')
                     type_elem.classList.add('card__type')
-                    type_elem.innerText = data.first_air_date ? 'TV' : 'MOV'
+                    type_elem.innerText = data.original_name ? 'TV' : 'MOV'
 
                 this.card.querySelector('.card__view').appendChild(type_elem)
-                this.card.classList.add(data.first_air_date ? 'card--tv' : 'card--movie')
+                this.card.classList.add(data.original_name ? 'card--tv' : 'card--movie')
             }
             
             
@@ -157,7 +158,7 @@ function Card(data, params = {}){
 
             let qu = data.quality || data.release_quality
 
-            if(qu && Storage.field('card_quality')){
+            if(qu && Storage.field('card_quality') && !data.original_name){
                 let quality = document.createElement('div')
                     quality.classList.add('card__quality')
                 
@@ -182,8 +183,6 @@ function Card(data, params = {}){
 
         this.img.onload = ()=>{
             this.card.classList.add('card--loaded')
-
-            ImageCache.write(this.img, this.img.src)
         }
     
         this.img.onerror = ()=>{
@@ -229,7 +228,12 @@ function Card(data, params = {}){
         if(!Storage.field('card_episodes')) return
 
         if(!this.watched_checked){
-            Timetable.get(data, (episodes)=>{
+            function get(callback){
+                if(data.original_name) Timetable.get(data, callback)
+                else callback([])
+            }
+
+            get(episodes=>{
                 let viewed
 
                 episodes.forEach(ep=>{
@@ -238,6 +242,34 @@ function Card(data, params = {}){
 
                     if(view.percent) viewed = {ep, view}
                 })
+
+                if(!viewed && data.original_name){
+                    let last  = Storage.get('online_watched_last', '{}')
+                    let filed = last[Utils.hash(data.original_title)]
+
+                    if(filed && filed.episode){
+                        viewed = {
+                            ep: {
+                                episode_number: filed.episode,
+                                name: Lang.translate('full_episode') + ' ' + filed.episode,
+                            },
+                            view: Timeline.view(Utils.hash([filed.season, filed.season > 10 ? ':' : '',filed.episode,data.original_title].join('')))
+                        }
+                    }
+                }
+
+                if(!viewed && !data.original_name){
+                    let time = Timeline.view(Utils.hash([data.original_title].join('')))
+
+                    if(time.percent) {
+                        viewed = {
+                            ep: {
+                                name: Lang.translate('title_viewed') + ' ' + (time.time ? Utils.secondsToTimeHuman(time.time) : time.percent + '%'),
+                            },
+                            view: time
+                        }
+                    }
+                }
 
                 if(viewed){
                     let soon = []
@@ -265,7 +297,7 @@ function Card(data, params = {}){
                         div.classList.add('card-watched__item')
                         div.appendChild(span)
 
-                        span.innerText = ep.episode_number + ' - ' + (days > 0 ? Lang.translate('full_episode_days_left') + ': ' + days : (ep.name || Lang.translate('noname')))
+                        span.innerText = (ep.episode_number ?  ep.episode_number + ' - ' : '') + (days > 0 ? Lang.translate('full_episode_days_left') + ': ' + days : (ep.name || Lang.translate('noname')))
 
                         if(ep == viewed.ep) div.appendChild(Timeline.render(viewed.view)[0])
 
@@ -350,24 +382,27 @@ function Card(data, params = {}){
                 where: 'history',
                 checkbox: true,
                 checked: status.history
-            },
-            {
-                title: Lang.translate('settings_cub_status'),
-                separator: true
             }
         ]
 
-        let marks = ['look', 'viewed', 'scheduled', 'continued', 'thrown']
+        if( window.lampa_settings.account_use){
+            let marks = ['look', 'viewed', 'scheduled', 'continued', 'thrown']
 
-        marks.forEach(m=>{
             menu_favorite.push({
-                title: Lang.translate('title_'+m),
-                where: m,
-                picked: status[m],
-                collect: true,
-                noenter: !Account.hasPremium()
+                title: Lang.translate('settings_cub_status'),
+                separator: true
             })
-        })
+
+            marks.forEach(m=>{
+                menu_favorite.push({
+                    title: Lang.translate('title_'+m),
+                    where: m,
+                    picked: status[m],
+                    collect: true,
+                    noenter: !Account.hasPremium()
+                })
+            })
+        }
 
         
         Manifest.plugins.forEach(plugin=>{
@@ -510,7 +545,7 @@ function Card(data, params = {}){
         else if(data.img)          src = data.img
         else                       src = './img/img_broken.svg'
 
-        ImageCache.read(this.img, src)
+        this.img.src = src
 
         this.update()
 

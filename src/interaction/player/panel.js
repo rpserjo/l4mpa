@@ -1,18 +1,19 @@
 import Template from '../template'
 import Subscribe from '../../utils/subscribe'
-import Controller from '../controller'
+import Controller from '../../core/controller'
 import State from '../../utils/machine'
 import Select from '../select'
-import Storage from '../../utils/storage'
+import Storage from '../../core/storage/storage'
 import Arrays from '../../utils/arrays'
-import Platform from '../../utils/platform'
-import Lang from '../../utils/lang'
-import Utils from '../../utils/math'
-import DeviceInput from '../../utils/device_input'
+import Platform from '../../core/platform'
+import Lang from '../../core/lang'
+import Utils from '../../utils/utils'
+import DeviceInput from '../device_input'
 import Video from './video'
 import TV from './iptv'
 import Footer from './footer'
 import Playlist from './playlist'
+import Segments from './segments'
 
 let html
 let listener = Subscribe()
@@ -29,6 +30,7 @@ let condition = {}
 let timer     = {}
 let tracks    = []
 let subs      = []
+let flows     = false
 let qualitys  = false
 let translates = {}
 let last_settings_action
@@ -48,6 +50,7 @@ function init(){
         subs: $('.player-panel__subs',html),
         timeline: $('.player-panel__timeline',html),
         quality: $('.player-panel__quality',html),
+        flow: $('.player-panel__flow',html),
         episode: $('.player-panel__next-episode-name',html),
         rewind_touch: $('.player-panel__time-touch-zone',html),
         playlist: html.find('.player-panel__playlist'),
@@ -55,7 +58,9 @@ function init(){
         iptv_channel: $('.player-panel-iptv__channel',html),
         iptv_arrow_up: $('.player-panel-iptv__arrow-up',html),
         iptv_arrow_down: $('.player-panel-iptv__arrow-down',html),
-        iptv_position: $('.player-panel-iptv__position',html)
+        iptv_position: $('.player-panel-iptv__position',html),
+
+        segments: $('.player-panel__timeline-segments',html),
     }
 
     /**
@@ -234,6 +239,36 @@ function init(){
     html.find('.player-panel__left .selector,.player-panel__center .selector,.player-panel__right .selector').on('hover:focus',function(){
         last_panel_focus = $(this)[0]
     })
+
+    /**
+     * Выбор потока
+     */
+    elems.flow.on('hover:enter',()=>{
+        if(flows){
+            let enabled = Controller.enabled().name
+
+            Select.show({
+                title: Lang.translate('player_flow'),
+                items: flows,
+                onSelect: (a)=>{
+                    flows.forEach(element => {
+                        element.enabled  = false
+                        element.selected = false
+                    })
+
+                    a.enabled  = true
+                    a.selected = true
+
+                    Controller.toggle(enabled)
+
+                    listener.send('flow',{url: a.url})
+                },
+                onBack: ()=>{ 
+                    Controller.toggle(enabled)
+                }
+            })
+        }
+    })
     
     /**
      * Выбор качества
@@ -256,7 +291,7 @@ function init(){
                         quality: i,
                         title: i + (lb ? '<sub>' + lb + '</sub>' : ''),
                         url: qu,
-                        selected: nw == i,
+                        selected: nw == Utils.qualityToText(i),
                         call: typeof qa == 'object' ? qa.call : false,
                         instance: qa
                     })
@@ -275,17 +310,19 @@ function init(){
                         Controller.toggle(enabled)
 
                         a.call(a.instance, (url)=>{
-                            elems.quality.text(a.quality)
+                            elems.quality.text(Utils.qualityToText(a.quality))
 
                             qs.forEach(q=>q.selected = false)
 
                             a.selected = true
 
                             listener.send('quality',{name: a.quality, url: url})
+
+                            if(a.instance && a.instance.trigger) a.instance.trigger()
                         })
                     }
                     else{
-                        elems.quality.text(a.quality)
+                        elems.quality.text(Utils.qualityToText(a.quality))
 
                         qs.forEach(q=>q.selected = false)
 
@@ -293,6 +330,8 @@ function init(){
                         a.selected = true
 
                         if(!Arrays.isArray(qualitys) || a.change_quality) listener.send('quality',{name: a.quality, url: a.url})
+
+                        if(a.instance && a.instance.trigger) a.instance.trigger()
 
                         Controller.toggle(enabled)
                     }
@@ -416,6 +455,34 @@ function init(){
 
         Controller.toggle('player_panel')
     })
+
+    Video.listener.follow('loadeddata', drawSegments)
+}
+
+function drawSegments(){
+    let segments = Segments.all()
+    let timeline = elems.segments.empty()
+
+    for(let name in segments){
+        for(let a = 0; a < segments[name].length; a++){
+            let seg      = segments[name][a]
+            let seg_elem = $(`<div class="player-panel__timeline-segment player-panel__timeline-segment--${name}"></div>`)
+            let duration = Video.video().duration || 0
+
+            let r_start = Math.min(duration, seg.start)
+            let r_end   = Math.min(duration, seg.end)
+            
+            let start    = r_start / duration * 100
+            let length   = (r_end - r_start) / duration * 100
+
+            seg_elem.css({
+                left: duration ? start + '%' : 0,
+                width: duration ? length + '%' : 0
+            })
+
+            timeline.append(seg_elem)
+        }
+    }
 }
 
 function hideRewind(){
@@ -579,6 +646,15 @@ function settings(){
             title: Lang.translate('player_share_title'),
             subtitle: Lang.translate('player_share_descr'),
             method: 'share'
+        },
+        {
+            title: Lang.translate('player_segments_title'),
+            subtitle: Lang.translate('player_segments_descr'),
+            method: 'segments'
+        },
+        {
+            title: Lang.translate('settings_player_subs'),
+            method: 'subs'
         }
     ]
 
@@ -623,6 +699,8 @@ function settings(){
             if(a.method == 'normalization_power') selectNormalizationStep('power','hight')
             if(a.method == 'normalization_smooth') selectNormalizationStep('smooth','medium')
             if(a.method == 'normalization_type') selectNormalizationType()
+            if(a.method == 'segments') selectSegments()
+            if(a.method == 'subs') selectSubs()
             if(a.method == 'share'){
                 Controller.toggle(Platform.screen('mobile') ? 'player' : 'player_panel')
 
@@ -631,6 +709,153 @@ function settings(){
         },
         onBack: ()=>{
             Controller.toggle(Platform.screen('mobile') ? 'player' : 'player_panel')
+        }
+    })
+}
+
+function selectSubs(){
+    let items = [
+        {
+            title: Lang.translate('settings_player_subs_size'),
+            subtitle: Lang.translate('settings_player_subs_size_descr'),
+            name: 'subtitles_size'
+        },
+        {
+            title: Lang.translate('settings_player_subs_stroke_use'),
+            subtitle: Lang.translate('settings_player_subs_stroke_use_descr'),
+            name: 'subtitles_stroke'
+        },
+        {
+            title: Lang.translate('settings_player_subs_backdrop_use'),
+            subtitle: Lang.translate('settings_player_subs_backdrop_use_descr'),
+            name: 'subtitles_backdrop'
+        },
+        {
+            title: Lang.translate('settings_rest_time'),
+            name: 'player_subs_shift_time'
+        }
+    ]
+
+    Select.show({
+        title: Lang.translate('settings_player_subs'),
+        items: items,
+        nohide: true,
+        onBack: settings,
+        onSelect: (a)=>{
+            let subitems = []
+
+            if(a.name == 'subtitles_size'){
+                subitems = [
+                    {
+                        title: Lang.translate('settings_param_subtitles_size_small'),
+                        value: 'small'
+                    },
+                    {
+                        title: Lang.translate('settings_param_subtitles_size_normal'),
+                        value: 'normal'
+                    },{
+                        title: Lang.translate('settings_param_subtitles_size_bigger'),
+                        value: 'large'
+                    }
+                ]
+            }
+
+            if(a.name == 'subtitles_stroke' || a.name == 'subtitles_backdrop'){
+                subitems = [
+                    {
+                        title: Lang.translate('settings_param_yes'),
+                        value: 'true'
+                    },
+                    {
+                        title: Lang.translate('settings_param_no'),
+                        value: 'false'
+                    }
+                ]
+            }
+
+            if(a.name == 'player_subs_shift_time'){
+                subitems = [-120, -90, -60, -30, -10, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 10, 30, 60, 90, 120]
+
+                subitems = subitems.map(i=>{
+                    return {
+                        title: (i > 0 ? '+' : '') + i + ' sec.',
+                        value: i,
+                        selected: Storage.get('player_subs_shift_time', '0') == i
+                    }
+                })
+            }
+            else{
+                subitems.forEach((i)=>{
+                    i.selected = (Storage.field(a.name) + '') == i.value
+                })
+            }
+
+            Select.show({
+                title: a.title,
+                items: subitems,
+                nohide: true,
+                onBack: selectSubs,
+                onSelect: (b)=>{
+                    Storage.set(a.name, b.value)
+
+                    Video.applySubsSettings()
+
+                    selectSubs()
+                }
+            })
+
+            
+        }
+    })
+}
+
+function selectSegments(){
+    let items = [
+        {
+            title: Lang.translate('player_segments_ad_title'),
+            name: 'ad',
+            subtitle: Lang.translate('player_segments_value_' + Storage.get('player_segments_ad', 'auto')),
+        },
+        {
+            title: Lang.translate('player_segments_skip_title'),
+            name: 'skip',
+            subtitle: Lang.translate('player_segments_value_' + Storage.get('player_segments_skip', 'auto')),
+        },
+    ]
+
+    Select.show({
+        title: Lang.translate('player_segments_title'),
+        items: items,
+        nohide: true,
+        onBack: settings,
+        onSelect: (a)=>{
+            Select.show({
+                title: a.title,
+                items: [
+                    {
+                        title: Lang.translate('player_segments_value_auto'),
+                        value: 'auto',
+                        selected: Storage.get('player_segments_'+a.name, 'auto') == 'auto'
+                    },
+                    {
+                        title: Lang.translate('player_segments_value_user'),
+                        value: 'user',
+                        selected: Storage.get('player_segments_'+a.name, 'auto') == 'user'
+                    },
+                    {
+                        title: Lang.translate('player_segments_value_none'),
+                        value: 'none',
+                        selected: Storage.get('player_segments_'+a.name, 'auto') == 'none'
+                    }
+                ],
+                nohide: true,
+                onBack: selectSegments,
+                onSelect: (b)=>{
+                    Storage.set('player_segments_'+a.name, b.value)
+
+                    selectSegments()
+                }
+            })
         }
     })
 }
@@ -1115,6 +1340,7 @@ function mousemove(){
  */
 function hide(){
     condition.visible = false
+    condition.mousemove = false
 
     visible(false)
 }
@@ -1153,7 +1379,7 @@ function setLevels(levels, current){
     
     qualitys = levels
 
-    elems.quality.text(current)
+    elems.quality.text(Utils.qualityToText(current))
 }
 
 /**
@@ -1172,7 +1398,7 @@ function quality(qs, url){
             let qu = typeof qa == 'object' ? qa.url : typeof qa == 'string' ? qa : ''
 
             if(qu == url){
-                elems.quality.text(i)
+                elems.quality.text(Utils.qualityToText(i))
                 break
             }
         }
@@ -1202,6 +1428,12 @@ function updateTranslate(where, data){
     if(!translates[where]) translates[where] = data
 }
 
+function setFlows(data){
+    flows = typeof data == 'object' ? data : false
+
+    elems.flow.toggleClass('hide', flows ? false : true)
+}
+
 /**
  * Уничтожить
  */
@@ -1212,6 +1444,7 @@ function destroy(){
     tracks    = []
     subs      = []
     qualitys  = false
+    flows     = false
     translates = {}
 
     timeline_last.position = 0
@@ -1231,9 +1464,12 @@ function destroy(){
     elems.tracks.toggleClass('hide',true)
     elems.episode.toggleClass('hide',true)
     elems.playlist.toggleClass('hide',true)
+    elems.flow.toggleClass('hide',true)
 
     html.toggleClass('panel--paused',false)
     html.toggleClass('panel--norewind',false)
+
+    elems.segments.empty()
 }
 
 /**
@@ -1266,5 +1502,6 @@ export default {
     visible,
     visibleStatus,
     showParams,
-    hideRewind
+    hideRewind,
+    setFlows
 }

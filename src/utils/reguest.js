@@ -1,15 +1,37 @@
 import Subscribe from '../utils/subscribe'
 import Arrays from './arrays'
-import Storage from './storage'
+import Storage from '../core/storage/storage'
 import Base64 from './base64'
 import Noty from '../interaction/noty'
-import Android from '../utils/android'
-import Lang from './lang'
-import Platform from './platform'
-import Manifest from './manifest'
-import Mirrors from './mirrors'
+import Android from '../core/android'
+import Lang from '../core/lang'
+import Platform from '../core/platform'
+import Manifest from '../core/manifest'
+import Mirrors from '../core/mirrors'
+import Cache from './cache'
+import Utils from './utils'
 
-function create(){
+let bad_mirrors = {}
+
+/**
+ * Универсальный запрос
+ * @example
+ * let network = new Request()
+ * network.get('https://site.com/api/method',function(data){console.log(data)},function(error){console.log(error)})
+ * network.silent('https://site.com/api/method',function(data){console.log(data)},function(error){console.log(error)})
+ * network.quiet('https://site.com/api/method',function(data){console.log(data)},function(error){console.log(error)})
+ * network.last('https://site.com/api/method',function(data){console.log(data)},function(error){console.log(error)})
+ * network.native('https://site.com/api/method',function(data){console.log(data)},function(error){console.log(error)})
+ * network.timeout(10000) // установить таймаут для всех запросов
+ * network.clear() // очистить все запросы
+ * network.again() // повторить последний запрос
+ * let last = network.latest() // вернуть обьект последненго запроса
+ * let error_text = network.errorDecode(jqXHR, exception) // декодировать ошибку в запросе
+ * let error_code = network.errorCode(jqXHR) // вернуть код ошибки
+ * let error_json = network.errorJSON(jqXHR) // вернуть json ошибки
+ * @returns {Request}
+ */
+function Request(){
     let listener = Subscribe();
 
     var _calls = []
@@ -257,6 +279,10 @@ function create(){
         return errorCode(jqXHR)
     }
 
+    this.errorJSON = function(jqXHR){
+        return errorJSON(jqXHR)
+    }
+
     function errorDecode(jqXHR, exception){
         if(!Arrays.isObject(jqXHR)) return Lang.translate('network_error')
 
@@ -293,21 +319,149 @@ function create(){
         return jqXHR && jqXHR.responseJSON ? jqXHR.responseJSON.code : jqXHR ? jqXHR.status : 404
     }
 
+    function errorJSON(jqXHR){
+        return jqXHR && jqXHR.responseJSON ? jqXHR.responseJSON : {
+            code: jqXHR ? jqXHR.status : 404,
+            text: jqXHR ? jqXHR.responseText || jqXHR.message || Lang.translate('network_404') : Lang.translate('network_404')
+        }
+    }
+
+    function go(params){
+        params.url = params.url || 'no url'
+
+        let error     = false
+        let hasmirror = Manifest.cub_mirrors.find(m=>params.url.indexOf(m) >= 0)
+        
+        if(hasmirror && params.url.indexOf('api/checker') == -1){
+            let mirrors = Manifest.cub_mirrors
+            
+            Arrays.remove(mirrors, hasmirror)
+
+            for(let name in bad_mirrors){
+                let mirror = bad_mirrors[name]
+
+                if(Date.now() - mirror.time > 1000 * 60 * 10){
+                    mirror.time = Date.now()
+                    mirror.urls = []
+                }
+
+                if(mirror.urls.length > 10){
+                    console.log('Request','bad mirror:', name, 'count:', mirror.urls.length)
+
+                    Arrays.remove(mirrors, name)
+
+                    mirror.urls = mirror.urls.slice(-11)
+                }
+            }
+
+            error = function(jqXHR, exception){
+                if(mirrors.length > 0 && (jqXHR.status < 400 || jqXHR.error_time > 1000 * 15)){
+                    if(!bad_mirrors[hasmirror]) bad_mirrors[hasmirror] = {
+                        urls: [],
+                        time: Date.now()
+                    }
+
+                    if(bad_mirrors[hasmirror].urls.indexOf(params.url) < 0){
+                        bad_mirrors[hasmirror].urls.push(params.url)
+                    }
+
+                    let next = mirrors.shift()
+
+                    console.log('Request','try next mirror for:', params.url, 'next mirror:', next)
+
+                    Manifest.cub_mirrors.forEach(mirror=>{
+                        params.url = params.url.replace(mirror, next)
+                    })
+
+                    hasmirror = next
+
+                    request(params, error)
+                }
+                else{
+                    if(params.before_error) params.before_error(jqXHR, exception);
+
+                    if(params.error) params.error(jqXHR, exception);
+
+                    if(params.after_error) params.after_error(jqXHR, exception);
+
+                    if(params.end) params.end();
+                }
+            }
+        }
+
+        request(params, error)
+    }
+
+    function cacheGet(params, callback) {
+        if(params.cache && params.cache.life > 0 && Storage.field('request_caching')) {
+            Cache.getData('other', cacheName(params), -1, true).then((result)=>{
+                if (result) {
+                    if(Date.now() < result.time + (params.cache.life * 1000 * 60)) callback(result.value, result.value)
+                    else callback(null, result.value)
+                } 
+                else callback(null, null)
+            }).catch(e=>{
+                callback(null, null)
+            })
+        }
+        else callback(null, null)
+    }
+
+    function cacheSet(params, data) {
+        Cache.rewriteData('other', cacheName(params), data).catch(e=>{})
+    }
+
+    function cacheName(params) {
+        let url = params.url || ''
+
+        // убираем зеркало из урла, что бы не было дублей в кеше
+        Manifest.cub_mirrors.forEach(mirror=>{
+            url = url.replace(mirror, '')
+        })
+
+        url = url.replace(/https?:\/\//i, '')
+
+        return 'request_[' + url + '][' + JSON.stringify(params.post_data || {}) + (params.dataType || 'json') + Storage.field('tmdb_lang') + ']'
+    }
+
 
     /**
      * Сделать запрос
      * @param {Object} params 
      */
-    function go(params){
+    function request(params, errorCallback = false){
         Lampa.Listener.send('request_before', {params});
 
+        let start_time = Date.now()
+        let cache_old  = false
+
         var error = function(jqXHR, exception){
+            if(params.attempts && params.attempts > 0){
+                params.attempts--
+
+                console.log('Request','attempt left:', params.attempts, 'for', params.url)
+
+                return go(params)
+            }
+
+            // Если есть старый кеш отдаем его
+            if(cache_old) return secuses(cache_old, true)
+
             jqXHR.decode_error = errorDecode(jqXHR, exception);
             jqXHR.decode_code  = errorCode(jqXHR);
 
-            Lampa.Listener.send('request_error', {params, error: jqXHR});
+            params.url = params.url || 'no url';
+
+            Lampa.Listener.send('request_error', {params, error: jqXHR, exception});
+
+            let end_time = Date.now() - start_time
+            let time = end_time > 1000 ? Math.round(end_time / 1000) + 's' : end_time + 'ms'
+
+            jqXHR.error_time = time
             
-            console.log('Request','error of '+params.url+' :', errorDecode(jqXHR, exception));
+            console.log('Request',params.post_data ? 'POST' : 'GET','time:',time,'error of '+params.url+' :', errorDecode(jqXHR, exception));
+
+            if(errorCallback) return errorCallback(jqXHR, exception);
 
             if(params.before_error) params.before_error(jqXHR, exception);
 
@@ -326,25 +480,39 @@ function create(){
 
         if(params.start) params.start();
 
-        let secuses = function(data){
-            Lampa.Listener.send('request_secuses', {params, data});
-
-            if(params.before_complite) params.before_complite(data);
-
-            if(params.complite){
-                try{
-                    params.complite(data);
+        let secuses = function(data, fromcache = false){
+            function sendSecuses(send_data){
+                if(params.cache && params.cache.life > 0 && !fromcache) {
+                    cacheSet(params, send_data)
                 }
-                catch(e){
-                    console.error('Request','complite error:', e.message + "\n\n" + e.stack);
 
-                    Noty.show('Error: ' + (e.error || e).message + '<br><br>' + (e.error && e.error.stack ? e.error.stack : e.stack || '').split("\n").join('<br>'))
-                }
-            } 
+                if(params.before_complite) params.before_complite(send_data)
 
-            if(params.after_complite) params.after_complite(data);
+                if(params.complite){
+                    try{
+                        params.complite(send_data)
+                    }
+                    catch(e){
+                        console.error('Request','complite error:', e.message + "\n\n" + e.stack)
 
-            if(params.end) params.end();
+                        Noty.show('Error: ' + (e.error || e).message + '<br><br>' + (e.error && e.error.stack ? e.error.stack : e.stack || '').split("\n").join('<br>'))
+                    }
+                } 
+
+                if(params.after_complite) params.after_complite(send_data)
+
+                if(params.end) params.end()
+            }
+
+            let abort_called = false
+
+            Lampa.Listener.send('request_secuses', {params, data, abort: ()=>{
+                abort_called = true
+
+                return sendSecuses
+            }})
+
+            if(!abort_called) sendSecuses(data)
         }
 
         let datatype = params.dataType || 'json';
@@ -366,8 +534,6 @@ function create(){
 
 				if(use && srv && params.url.indexOf(srv) >= 0){
                     let authorization = "Basic " + Base64.encode(Storage.get('torrserver_login')+':'+Storage.value('torrserver_password'))
-
-                    console.log('Request','authorization:',authorization)
 
                     xhr.setRequestHeader("Authorization", authorization)
                 } 
@@ -395,7 +561,18 @@ function create(){
             data.headers = params.headers
         }
 
-        $.ajax(data);
+        cacheGet(params, (cached, old)=>{
+            // Запомнить что есть старый кеш на случай ошибки что бы отдать его
+            cache_old = old
+
+            if(cached){
+                secuses(cached, true)
+            }
+            else{
+                $.ajax(data);
+            }
+        })
+        
 
         need.timeout  = 1000 * 30;
     }
@@ -406,11 +583,16 @@ function create(){
      */
     function android_go(params){
         Lampa.Listener.send('request_before', {params});
+
+        let start_time = Date.now()
         
         var error = function(jqXHR, exception){
             Lampa.Listener.send('request_error', {params, error: jqXHR})
 
-            console.log('Request','error of '+params.url+' :', errorDecode(jqXHR, exception));
+            let end_time = Date.now() - start_time
+            let time = end_time > 1000 ? Math.round(end_time / 1000) + 's' : end_time + 'ms'
+
+            console.log('Request',params.post_data ? 'POST' : 'GET','time:',time,'error of '+params.url+' :', errorDecode(jqXHR, exception));
 
             if(params.before_error) params.before_error(jqXHR, exception);
 
@@ -463,4 +645,4 @@ function create(){
     }
 }
 
-export default create
+export default Request

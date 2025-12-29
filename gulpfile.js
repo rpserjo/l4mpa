@@ -17,7 +17,8 @@ var concat         = require('gulp-concat'),
     fileinclude    = require('gulp-file-include'),
     replace        = require('gulp-replace'),
     fs             = require('fs'),
-    worker         = require('rollup-plugin-web-worker-loader')
+    worker         = require('rollup-plugin-web-worker-loader'),
+    crypto         = require('crypto');
 
 var source = require('vinyl-source-stream');
 var buffer = require('vinyl-buffer');
@@ -89,7 +90,7 @@ function merge(done) {
       .pipe(replace(/return kIsNodeJS/g, "return false"))
       // Where to send the output file
       .pipe(dest(dstFolder));
-
+      
     done();
 }
 
@@ -120,6 +121,13 @@ function bubbleFile(name){
       .pipe(dest(dstFolder));
 }
 
+function getFileHash(path) {
+    const fileBuffer = fs.readFileSync(path);
+    const hashSum = crypto.createHash('md5');
+    hashSum.update(fileBuffer);
+    return hashSum.digest('hex');
+}
+
 function plugins(done) {
     fs.readdirSync(plgFolder).filter(function (file) {
         return fs.statSync(plgFolder+'/'+file).isDirectory();
@@ -128,7 +136,7 @@ function plugins(done) {
 
         plugin_sass(plgFolder+'/'+folder)
     });
-
+      
     done();
 }
 
@@ -153,7 +161,19 @@ function build_web(done){
 
     //таймер сила!
     copy_timer = setTimeout(()=>{
-        src([dstFolder+'app.js']).pipe(dest(bulFolder+'web/'));
+        //src([dstFolder+'app.js']).pipe(dest(bulFolder+'web/'));
+
+        let date      = new Date();
+        let full_date = date.getFullYear() + '-' +
+                        ('0' + (date.getMonth()+1)).slice(-2) + '-' +
+                        ('0' + date.getDate()).slice(-2) + ' ' +
+                        ('0' + date.getHours()).slice(-2) + ':' +
+                        ('0' + date.getMinutes()).slice(-2);
+
+        src(dstFolder+'app.js')
+            .pipe(replace('{__APP_HASH__}', getFileHash(dstFolder + '/app.js')))
+            .pipe(replace('{__APP_BUILD__}', full_date))
+            .pipe(dest(bulFolder+'web/'));
 
         fs.readdirSync(dstFolder).filter(function (file) {
             return fs.statSync(dstFolder+'/'+file).isDirectory();
@@ -163,6 +183,29 @@ function build_web(done){
     },500)
 
     done();
+}
+
+function write_manifest(done){
+    var manifest = fs.readFileSync(srcFolder+'core/manifest.js', 'utf8')
+    var hash     = getFileHash(dstFolder + '/app.js')
+
+    var app_version = manifest.match(/app_version: '(.*?)',/)[1]
+    var css_version = manifest.match(/css_version: '(.*?)',/)[1]
+
+    var object = {
+        app_version: app_version,
+        css_version: css_version,
+        css_digital: parseInt(css_version.replace(/\./g,'')),
+        app_digital: parseInt(app_version.replace(/\./g,'')),
+        time: Date.now(),
+        hash: hash
+    }
+
+    console.log('assembly', object)
+
+    fs.writeFileSync(idxFolder+'github/assembly.json', JSON.stringify(object, null, 4))
+
+    done()
 }
 
 /** Публикуем для WEB платформы **/
@@ -275,6 +318,19 @@ function sass_task(){
 }
 
 function uglify_task() {
+    let date      = new Date();
+    let full_date = date.getFullYear() + '-' +
+                    ('0' + (date.getMonth()+1)).slice(-2) + '-' +
+                    ('0' + date.getDate()).slice(-2) + ' ' +
+                    ('0' + date.getHours()).slice(-2) + ':' +
+                    ('0' + date.getMinutes()).slice(-2);
+
+    return src([dstFolder+'app.js'])
+        .pipe(replace('{__APP_HASH__}', getFileHash(dstFolder + '/app.js')))
+        .pipe(replace('{__APP_BUILD__}', full_date))
+        .pipe(concat('app.min.js')).pipe(dest(dstFolder));
+
+
     return src([dstFolder+'app.js']).pipe(concat('app.min.js')).pipe(dest(dstFolder));
 }
 
@@ -291,8 +347,8 @@ function enable_debug_mode(done){
 
 /**
  * преобразует путь к исходному файлу
- * @param {string} relativeSourcePath
- * @param {string} sourcemapPath
+ * @param {string} relativeSourcePath 
+ * @param {string} sourcemapPath 
  * @returns {string} a new path to source
  */
 function pluginSourcemapPathTransform(relativeSourcePath, sourcemapPath) {
@@ -327,9 +383,9 @@ function buildDoc(done){
                             let params = parsedComment.tags.filter(t=>['doc','name','alias'].indexOf(t.title) == -1)
                             let category = parsedComment.tags.find(t=>t.title == 'alias')
                             let name = parsedComment.tags.find(t=>t.title == 'name')
-
+                            
                             //console.log(JSON.stringify(parsedComment.tags, null, 4))
-
+                            
                             data.push({
                                 file: filePath,
                                 params: params.map(p=>({param: p.name || p.title, desc: p.description || '', type: p.type ? p.type.name : 'any'})),
@@ -343,7 +399,7 @@ function buildDoc(done){
             }
         })
     }
-
+    
     scan(srcFolder)
 
     let doc = fs.readFileSync(idxFolder+'doc/index.html', 'utf8')
@@ -358,11 +414,10 @@ function buildDoc(done){
 
 exports.pack_webos   = series(sync_webos, uglify_task, public_webos, index_webos);
 exports.pack_tizen   = series(sync_tizen, uglify_task, public_tizen, index_tizen);
-exports.pack_github  = series(sync_github, uglify_task, public_github, index_github);
+exports.pack_github  = series(sync_github, uglify_task, public_github, write_manifest, index_github);
 exports.pack_plugins = series(plugins);
 exports.test         = series(test);
 exports.default = parallel(watch, browser_sync);
 exports.debug = series(enable_debug_mode, this.default)
-exports.build        = series(merge, plugins, sass_task, lang_task, sync_web, build_web)
-
 exports.doc = series(sync_doc, buildDoc)
+exports.write_manifest = series(write_manifest)
